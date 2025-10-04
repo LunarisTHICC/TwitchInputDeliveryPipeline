@@ -1,14 +1,22 @@
 remote-input/
-  ├── client/
-  │   └── index.html
-  ├── server/
-  │   ├── gateway.py
-  │   ├── requirements.txt
-  │   └── config.json
-  ├── injectors/
-  │   ├── injector_hid.cpp
-  │   ├── injector_pad.cpp
-  │   ├── virtualinput.hpp         # adapter (replace with actual VirtualInput API)
-  │   ├── build_hid.bat
-  │   └── build_pad.bat
-  └── README.md
+├── client/
+│   └── index.html                 # Browser capture (mouse, keyboard, gamepad)
+│
+├── server/
+│   ├── gateway.py                 # WebRTC gateway + toggle logic
+│   ├── requirements.txt           # aiohttp + aiortc
+│   └── config.json                # Current capability state (keyboard/mouse/gamepad)
+│
+├── injectors/
+│   ├── csharp-hid/                # New C# HID injector (VirtualInput 1.0.1)
+│   │   ├── RemoteInput.HidInjector.csproj
+│   │   ├── Program.cs             # UDP listener + VirtualKeyboard/VirtualMouse calls
+│   │   └── KeyMap.cs              # KeyboardEvent.code → Keys mapping
+│   │
+│   ├── cpp-pad/                   # Native gamepad injector (ViGEm)
+│   │   ├── injector_pad.cpp       # UDP listener + ViGEmClient injection
+│   │   └── build_pad.bat          # Build script (cl + ViGEmClient.lib)
+│   │
+│   └── README.md                  # Notes on building/running injectors
+│
+└── README.md                      # Top-level usage guide
