@@ -48,3 +48,12 @@ Viewers interact via a browser, their inputs are sent over WebRTC, and the host 
 cd server
 pip install -r requirements.txt
 python gateway.py
+
+## Remote Input Delivery Pipeline structure
+
+remote-input/
+  client/index.html
+  server/{gateway.py, requirements.txt, config.json}
+  injectors/
+    csharp-hid/{RemoteInput.HidInjector.csproj, Program.cs, KeyMap.cs}
+    cpp-pad/{injector_pad.cpp, build_pad.bat}
