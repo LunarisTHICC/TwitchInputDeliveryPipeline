@@ -1,0 +1,186 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Remote Input Client</title>
+  <style>
+    html, body { height: 100%; margin: 0; background: #0e0e10; color: #eee; font-family: system-ui; }
+    #pad { width: 100%; height: calc(100% - 60px); cursor: crosshair; }
+    #bar { height: 60px; display: flex; gap: 12px; align-items: center; padding: 10px; background: #1a1a1f; }
+    .chip { padding: 6px 10px; border-radius: 12px; background: #2a2a31; }
+    .on { background: #1e5; color: #021; }
+    .off { background: #d55; color: #210; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <span>Capabilities:</span>
+    <span id="kb" class="chip off">Keyboard</span>
+    <span id="ms" class="chip off">Mouse</span>
+    <span id="gp" class="chip off">Gamepad</span>
+    <span id="status" class="chip">Connecting…</span>
+  </div>
+  <div id="pad"></div>
+  <script>
+    const VER = 1;
+    const pad = document.getElementById("pad");
+    const kbChip = document.getElementById("kb");
+    const msChip = document.getElementById("ms");
+    const gpChip = document.getElementById("gp");
+    const statusChip = document.getElementById("status");
+
+    let caps = { keyboard: false, mouse: false, gamepad: false };
+    let dc;
+
+    function setChip(el, on) {
+      el.classList.toggle("on", on);
+      el.classList.toggle("off", !on);
+    }
+    function updateCaps(newCaps) {
+      caps = newCaps;
+      setChip(kbChip, !!caps.keyboard);
+      setChip(msChip, !!caps.mouse);
+      setChip(gpChip, !!caps.gamepad);
+    }
+
+    function pkt(type, payload) {
+      const len = 2 + (payload ? payload.length : 0);
+      const b = new Uint8Array(len);
+      b[0] = VER; b[1] = type;
+      if (payload) b.set(payload, 2);
+      return b.buffer;
+    }
+    function i16arr(vals) {
+      const dv = new DataView(new ArrayBuffer(vals.length * 2));
+      vals.forEach((v, i) => dv.setInt16(i * 2, v, true));
+      return new Uint8Array(dv.buffer);
+    }
+    function u16(n) {
+      const dv = new DataView(new ArrayBuffer(2));
+      dv.setUint16(0, n, true);
+      return new Uint8Array(dv.buffer);
+    }
+    function encodeCode(code) {
+      const enc = new TextEncoder();
+      const bytes = enc.encode(code);
+      const out = new Uint8Array(1 + bytes.length);
+      out[0] = bytes.length; out.set(bytes, 1);
+      return out;
+    }
+
+    async function connect() {
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
+      dc = pc.createDataChannel("input", { ordered: false, maxRetransmits: 0 });
+      dc.binaryType = "arraybuffer";
+
+      dc.onopen = () => { statusChip.textContent = "Connected"; };
+      dc.onclose = () => { statusChip.textContent = "Disconnected"; };
+      dc.onmessage = (e) => {
+        if (typeof e.data === "string") return;
+        const u = new Uint8Array(e.data);
+        if (u[0] !== VER) return;
+        if (u[1] === 0x20) {
+          const len = (u[2] | (u[3] << 8));
+          const json = new TextDecoder().decode(u.slice(4, 4 + len));
+          const obj = JSON.parse(json);
+          if (obj && obj.caps) updateCaps(obj.caps);
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const res = await fetch("/signal/offer", {
+        method: "POST",
+        headers: { "Content-Type": "application/sdp" },
+        body: offer.sdp
+      });
+      const answerSdp = await res.text();
+      await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+    }
+
+    // Mouse handling (relative deltas, sampled)
+    let lastX = 0, lastY = 0, moving = false, pendingMove = null;
+    pad.addEventListener("mousemove", (e) => {
+      if (!dc || dc.readyState !== "open" || !caps.mouse) return;
+      const rect = pad.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const dx = Math.round(x - lastX);
+      const dy = Math.round(y - lastY);
+      lastX = x; lastY = y;
+      if (!dx && !dy) return;
+      pendingMove = { dx: Math.max(-32768, Math.min(32767, dx)), dy: Math.max(-32768, Math.min(32767, dy)) };
+      if (!moving) {
+        moving = true;
+        setTimeout(() => {
+          if (pendingMove) {
+            dc.send(pkt(0x01, i16arr([pendingMove.dx, pendingMove.dy])));
+            pendingMove = null;
+          }
+          moving = false;
+        }, 12);
+      }
+    });
+    pad.addEventListener("mousedown", (e) => {
+      if (!dc || dc.readyState !== "open" || !caps.mouse) return;
+      dc.send(pkt(0x02, new Uint8Array([e.button])));
+    });
+    pad.addEventListener("mouseup", (e) => {
+      if (!dc || dc.readyState !== "open" || !caps.mouse) return;
+      dc.send(pkt(0x03, new Uint8Array([e.button])));
+    });
+    pad.addEventListener("wheel", (e) => {
+      if (!dc || dc.readyState !== "open" || !caps.mouse) return;
+      e.preventDefault();
+      const dv = new DataView(new ArrayBuffer(2));
+      dv.setInt16(0, Math.max(-32768, Math.min(32767, e.deltaY)), true);
+      dc.send(pkt(0x06, new Uint8Array(dv.buffer)));
+    }, { passive: false });
+
+    // Keyboard
+    window.addEventListener("keydown", (e) => {
+      if (!dc || dc.readyState !== "open" || !caps.keyboard || e.repeat) return;
+      dc.send(pkt(0x04, encodeCode(e.code)));
+    });
+    window.addEventListener("keyup", (e) => {
+      if (!dc || dc.readyState !== "open" || !caps.keyboard) return;
+      dc.send(pkt(0x05, encodeCode(e.code)));
+    });
+
+    // Gamepad polling (~60Hz)
+    function normAxis(v) { return Math.max(-32768, Math.min(32767, Math.round((v || 0) * 32767))); }
+    function toMask(gp) {
+      let m = 0;
+      const on = (i) => gp.buttons[i]?.pressed;
+      m |= on(0) ? (1<<0) : 0;  m |= on(1) ? (1<<1) : 0;  m |= on(2) ? (1<<2) : 0;  m |= on(3) ? (1<<3) : 0;
+      m |= on(4) ? (1<<4) : 0;  m |= on(5) ? (1<<5) : 0;  m |= on(8) ? (1<<6) : 0;  m |= on(9) ? (1<<7) : 0;
+      m |= on(10)? (1<<8) : 0;  m |= on(11)? (1<<9) : 0;
+      m |= on(12)? (1<<10): 0;  m |= on(13)? (1<<11): 0;  m |= on(14)? (1<<12): 0;  m |= on(15)? (1<<13): 0;
+      return m >>> 0;
+    }
+    let lastGP = 0;
+    function pollGamepad() {
+      const now = performance.now();
+      if (dc && dc.readyState === "open" && caps.gamepad && now - lastGP >= 16) {
+        const gp = navigator.getGamepads()[0];
+        if (gp) {
+          const lx = normAxis(gp.axes[0]), ly = normAxis(gp.axes[1]);
+          const rx = normAxis(gp.axes[2]), ry = normAxis(gp.axes[3]);
+          const lt = Math.max(0, Math.min(255, Math.round((gp.buttons[6]?.value || 0) * 255)));
+          const rt = Math.max(0, Math.min(255, Math.round((gp.buttons[7]?.value || 0) * 255)));
+          const mask = toMask(gp);
+          const payload = new Uint8Array(2*4 + 2 + 4);
+          const dv = new DataView(payload.buffer);
+          dv.setInt16(0, lx, true); dv.setInt16(2, ly, true); dv.setInt16(4, rx, true); dv.setInt16(6, ry, true);
+          payload[8] = lt; payload[9] = rt; dv.setUint32(10, mask, true);
+          dc.send(pkt(0x10, payload));
+          lastGP = now;
+        }
+      }
+      requestAnimationFrame(pollGamepad);
+    }
+
+    connect().then(() => pollGamepad()).catch(err => { statusChip.textContent = "Error"; console.error(err); });
+  </script>
+</body>
+</html>
