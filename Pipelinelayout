@@ -1,0 +1,14 @@
+remote-input/
+  ├── client/
+  │   └── index.html
+  ├── server/
+  │   ├── gateway.py
+  │   ├── requirements.txt
+  │   └── config.json
+  ├── injectors/
+  │   ├── injector_hid.cpp
+  │   ├── injector_pad.cpp
+  │   ├── virtualinput.hpp         # adapter (replace with actual VirtualInput API)
+  │   ├── build_hid.bat
+  │   └── build_pad.bat
+  └── README.md
